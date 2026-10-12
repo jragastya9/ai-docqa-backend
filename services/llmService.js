@@ -2,115 +2,97 @@ import Groq from 'groq-sdk';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
-const MAX_TOKENS = 800;
-const TEMPERATURE = 0.3;
+const MODEL = 'openai/gpt-oss-120b';
 
-export async function generateAnswer(question, chunks, history = []) {
-  if (!question || typeof question !== 'string') {
-    throw new Error('Question is required');
-  }
-
-  if (!Array.isArray(chunks) || chunks.length === 0) {
-    throw new Error('At least one context chunk is required');
-  }
-
-  // Build context string with numbered sources
+function buildSystemPrompt(chunks) {
   const context = chunks
-    .map((c, i) => {
-      return `[Source ${i + 1}]\n${c.text}`;
-    })
-    .join('\n\n---\n\n');
+    .map(
+      (c, i) =>
+        `[Source ${i + 1}] (Document: ${c.documentName || 'Unknown'})\n${c.text}`
+    )
+    .join('\n\n');
 
-  const systemPrompt = `You are a helpful assistant that answers questions strictly based on the provided context and conversation history.
+  return `You are a helpful AI assistant that answers questions based on the user's documents.
 
 RULES:
-1. Answer ONLY using information from the provided sources.
-2. If the sources don't contain the answer, say "I don't have enough information in the provided documents to answer that."
-3. Cite sources using [Source N] format when you use information from them.
-4. Do NOT include any file paths, line numbers, or file references like "L1-L4".
-5. Use conversation history to understand follow-up questions (pronouns like "it", "that", "the other one").
-6. Be concise and direct. No filler.
-7. Never invent facts, prices, dates, or names.`;
+- Answer ONLY using the provided context below.
+- If the context doesn't contain the answer, say: "I couldn't find that information in your documents."
+- Cite sources using [Source N] notation when you use information from a source.
+- Be concise and direct. No filler.
+- Never invent facts.
 
-  const messages = [{ role: 'system', content: systemPrompt }];
+CONTEXT:
+${context}`;
+}
 
-  // Add conversation history
+function buildMessages(question, chunks, history) {
+  const messages = [{ role: 'system', content: buildSystemPrompt(chunks) }];
+
   for (const msg of history) {
-    messages.push({
-      role: msg.role === 'user' ? 'user' : 'assistant',
-      content: msg.content,
-    });
+    messages.push({ role: msg.role, content: msg.content });
   }
 
-  // Add current question with context
-  const userPrompt = `Context sources:
+  messages.push({ role: 'user', content: question });
+  return messages;
+}
 
-${context}
-
----
-
-Question: ${question}
-
-Answer:`;
-
-  messages.push({ role: 'user', content: userPrompt });
-
-  console.log(
-    `🤖 Calling LLM (${MODEL}) with ${chunks.length} sources + ${history.length} history msgs`
-  );
-  const startTime = Date.now();
+// ─── Non-streaming (kept for fallback / API compatibility) ───
+export async function generateAnswer(question, chunks, history = []) {
+  const messages = buildMessages(question, chunks, history);
 
   const completion = await groq.chat.completions.create({
     model: MODEL,
     messages,
-    temperature: TEMPERATURE,
-    max_tokens: MAX_TOKENS,
+    temperature: 0.2,
+    max_tokens: 1024,
   });
 
-  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-  const answer = completion.choices[0]?.message?.content?.trim() || '';
+  const answer = completion.choices[0]?.message?.content || '';
   const tokensUsed = completion.usage?.total_tokens || 0;
 
-  console.log(`🤖 LLM responded in ${duration}s (${tokensUsed} tokens)`);
-
-  return { answer, tokensUsed, duration };
+  return { answer, tokensUsed };
 }
 
-export async function generateAnswerStream(question, chunks, onToken) {
-  if (!question || !chunks?.length) {
-    throw new Error('Question and chunks are required');
-  }
+// ─── Streaming version ───
+/**
+ * Streams the answer token-by-token.
+ * Returns an async generator that yields { type, data } events.
+ * Event types: 'token' | 'done' | 'error'
+ */
+export async function* streamAnswer(question, chunks, history = []) {
+  const messages = buildMessages(question, chunks, history);
 
-  const context = chunks
-    .map((c, i) => `[Source ${i + 1}]\n${c.text}`)
-    .join('\n\n---\n\n');
+  try {
+    const stream = await groq.chat.completions.create({
+      model: MODEL,
+      messages,
+      temperature: 0.2,
+      max_tokens: 1024,
+      stream: true,
+    });
 
-  const systemPrompt = `You are a helpful assistant that answers questions strictly based on the provided context. Cite sources as [Source N]. If you cannot answer from the context, say so.`;
+    let fullText = '';
+    let tokensUsed = 0;
 
-  const stream = await groq.chat.completions.create({
-    model: MODEL,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content: `Context:\n\n${context}\n\n---\n\nQuestion: ${question}`,
-      },
-    ],
-    temperature: TEMPERATURE,
-    max_tokens: MAX_TOKENS,
-    stream: true,
-  });
-
-  let fullAnswer = '';
-
-  for await (const chunk of stream) {
-    const token = chunk.choices[0]?.delta?.content || '';
-    if (token) {
-      fullAnswer += token;
-      onToken(token);
+    for await (const chunk of stream) {
+      const delta = chunk.choices?.[0]?.delta?.content || '';
+      if (delta) {
+        fullText += delta;
+        yield { type: 'token', data: delta };
+      }
+      if (chunk.usage?.total_tokens) {
+        tokensUsed = chunk.usage.total_tokens;
+      }
     }
-  }
 
-  return fullAnswer;
+    // Groq returns usage only on the final chunk sometimes — estimate if missing
+    if (!tokensUsed) {
+      tokensUsed = Math.ceil(fullText.length / 4);
+    }
+
+    yield { type: 'done', data: { fullText, tokensUsed } };
+  } catch (err) {
+    console.error('streamAnswer error:', err);
+    yield { type: 'error', data: err.message };
+  }
 }
