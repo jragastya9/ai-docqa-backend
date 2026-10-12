@@ -1,0 +1,22 @@
+﻿node_modules/
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+*.log
+.DS_Store
+coverage/
+uploads/
+temp/
+tmp/
+.vscode/
+.idea/
+*.tsbuildinfo
+
+.cache/
+# HuggingFace model cache
+.cache/
+models/
+*.onnx
