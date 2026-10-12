@@ -10,6 +10,7 @@ import conversationRoutes from './routes/conversation.routes.js';
 import shareRoutes from './routes/share.routes.js';
 import billingRoutes from './routes/billing.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
+import analyticsRoutes from './routes/analytics.routes.js';
 
 const app = express();
 
@@ -18,7 +19,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
   'http://10.179.162.42:3000',
-  process.env.FRONTEND_URL, // set on Render after Vercel deploy
+  process.env.FRONTEND_URL,
 ].filter(Boolean);
 
 app.use(
@@ -51,6 +52,7 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/share', shareRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/analytics', analyticsRoutes);   // ← ADDED
 
 // Error handler
 app.use((err, req, res, next) => {
