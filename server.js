@@ -11,6 +11,7 @@ import shareRoutes from './routes/share.routes.js';
 import billingRoutes from './routes/billing.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
+import teamRoutes from './routes/team.routes.js';
 
 const app = express();
 
@@ -52,7 +53,8 @@ app.use('/api/conversations', conversationRoutes);
 app.use('/api/share', shareRoutes);
 app.use('/api/billing', billingRoutes);
 app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/analytics', analyticsRoutes);   // ← ADDED
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/team', teamRoutes);
 
 // Error handler
 app.use((err, req, res, next) => {

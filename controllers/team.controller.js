@@ -6,11 +6,6 @@ import { sendTeamInviteEmail } from '../services/emailService.js';
 
 const INVITE_TTL_DAYS = 7;
 
-/**
- * POST /api/team/invite
- * Body: { email, role }
- * Owner/Admin only.
- */
 export async function inviteMember(req, res) {
   try {
     const { email, role = 'member' } = req.body;
@@ -18,20 +13,15 @@ export async function inviteMember(req, res) {
     const inviterId = req.user._id;
 
     if (!email || typeof email !== 'string') {
-      return res
-        .status(400)
-        .json({ success: false, error: 'Email is required' });
+      return res.status(400).json({ success: false, error: 'Email is required' });
     }
 
     const normalized = email.toLowerCase().trim();
 
     if (!['admin', 'member', 'viewer'].includes(role)) {
-      return res
-        .status(400)
-        .json({ success: false, error: 'Invalid role' });
+      return res.status(400).json({ success: false, error: 'Invalid role' });
     }
 
-    // Check if already a member of this tenant
     const existing = await User.findOne({ email: normalized, tenantId });
     if (existing) {
       return res.status(400).json({
@@ -40,7 +30,6 @@ export async function inviteMember(req, res) {
       });
     }
 
-    // Check for existing pending invite
     const pending = await Invitation.findOne({
       tenantId,
       email: normalized,
@@ -53,7 +42,6 @@ export async function inviteMember(req, res) {
       });
     }
 
-    // Create invite
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(
       Date.now() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000
@@ -68,7 +56,6 @@ export async function inviteMember(req, res) {
       expiresAt,
     });
 
-    // Send email
     const tenant = await Tenant.findById(tenantId);
     const inviter = await User.findById(inviterId);
     const frontendUrl =
@@ -85,8 +72,7 @@ export async function inviteMember(req, res) {
         expiresInDays: INVITE_TTL_DAYS,
       });
     } catch (emailErr) {
-      console.error('Failed to send invite email:', emailErr.message);
-      // Don't fail the request — the invite exists, we can resend
+      console.error('Invite email failed:', emailErr.message);
     }
 
     return res.status(201).json({
@@ -106,10 +92,6 @@ export async function inviteMember(req, res) {
   }
 }
 
-/**
- * GET /api/team
- * List all members + pending invites for the tenant.
- */
 export async function listTeam(req, res) {
   try {
     const tenantId = req.tenantId;
@@ -149,11 +131,6 @@ export async function listTeam(req, res) {
   }
 }
 
-/**
- * PATCH /api/team/:id/role
- * Body: { role }
- * Owner only.
- */
 export async function updateMemberRole(req, res) {
   try {
     const { id } = req.params;
@@ -161,16 +138,12 @@ export async function updateMemberRole(req, res) {
     const tenantId = req.tenantId;
 
     if (!['admin', 'member', 'viewer'].includes(role)) {
-      return res
-        .status(400)
-        .json({ success: false, error: 'Invalid role' });
+      return res.status(400).json({ success: false, error: 'Invalid role' });
     }
 
     const member = await User.findOne({ _id: id, tenantId });
     if (!member) {
-      return res
-        .status(404)
-        .json({ success: false, error: 'Member not found' });
+      return res.status(404).json({ success: false, error: 'Member not found' });
     }
 
     if (member.role === 'owner') {
@@ -198,10 +171,6 @@ export async function updateMemberRole(req, res) {
   }
 }
 
-/**
- * DELETE /api/team/:id
- * Owner only. Cannot remove yourself or the owner.
- */
 export async function removeMember(req, res) {
   try {
     const { id } = req.params;
@@ -215,9 +184,7 @@ export async function removeMember(req, res) {
 
     const member = await User.findOne({ _id: id, tenantId });
     if (!member) {
-      return res
-        .status(404)
-        .json({ success: false, error: 'Member not found' });
+      return res.status(404).json({ success: false, error: 'Member not found' });
     }
 
     if (member.role === 'owner') {
@@ -226,7 +193,6 @@ export async function removeMember(req, res) {
         .json({ success: false, error: 'Cannot remove the owner' });
     }
 
-    // Unlink from tenant — safer than deleting the user (they might be in another tenant later)
     member.tenantId = null;
     await member.save();
 
@@ -237,10 +203,6 @@ export async function removeMember(req, res) {
   }
 }
 
-/**
- * DELETE /api/team/invite/:id
- * Revoke a pending invite. Owner/Admin only.
- */
 export async function revokeInvite(req, res) {
   try {
     const { id } = req.params;
@@ -263,10 +225,6 @@ export async function revokeInvite(req, res) {
   }
 }
 
-/**
- * GET /api/team/invite/:token  (PUBLIC — no auth)
- * Look up an invite by token so the accept page can show workspace info.
- */
 export async function getInviteByToken(req, res) {
   try {
     const { token } = req.params;
@@ -311,10 +269,6 @@ export async function getInviteByToken(req, res) {
   }
 }
 
-/**
- * POST /api/team/invite/:token/accept  (PUBLIC — but requires new user data)
- * Body: { name, password }
- */
 export async function acceptInvite(req, res) {
   try {
     const { token } = req.params;
@@ -354,17 +308,14 @@ export async function acceptInvite(req, res) {
         .json({ success: false, error: 'Invitation has expired' });
     }
 
-    // Check if user already exists
     const existingUser = await User.findOne({ email: invite.email });
     if (existingUser) {
-      // If they're already in a tenant, reject
       if (existingUser.tenantId) {
         return res.status(400).json({
           success: false,
           error: 'This email is already registered to another workspace',
         });
       }
-      // Attach them to the tenant
       existingUser.tenantId = invite.tenantId;
       existingUser.role = invite.role;
       await existingUser.save();
@@ -382,7 +333,6 @@ export async function acceptInvite(req, res) {
       });
     }
 
-    // Create new user
     const bcrypt = await import('bcryptjs');
     const passwordHash = await bcrypt.default.hash(password, 12);
 
@@ -392,7 +342,7 @@ export async function acceptInvite(req, res) {
       password: passwordHash,
       tenantId: invite.tenantId,
       role: invite.role,
-      emailVerified: true, // They clicked a link we emailed them
+      emailVerified: true,
     });
 
     invite.status = 'accepted';

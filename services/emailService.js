@@ -134,6 +134,7 @@ export async function sendTeamInviteEmail({
   tenantName,
   role,
   inviteUrl,
+  expiresInDays = 7,
 }) {
   const subject = `You've been invited to join ${tenantName} on LocalBiz AI`;
   const html = wrap(`
@@ -147,7 +148,7 @@ export async function sendTeamInviteEmail({
     ${button(inviteUrl, 'Accept invitation')}
     ${fallbackLink(inviteUrl)}
     ${paragraph(
-      '<span style="font-size:12px;color:#9ca3af;">This invitation expires in 7 days. If you didn\'t expect this email, you can safely ignore it.</span>'
+      `<span style="font-size:12px;color:#9ca3af;">This invitation expires in ${expiresInDays} days. If you didn't expect this email, you can safely ignore it.</span>`
     )}
   `);
   return send({ to, subject, html });
