@@ -13,10 +13,17 @@ import dashboardRoutes from './routes/dashboard.routes.js';
 
 const app = express();
 
-// CORS — MUST be first
+// ─── CORS — MUST be first ───
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://10.179.162.42:3000',
+  process.env.FRONTEND_URL, // set on Render after Vercel deploy
+].filter(Boolean);
+
 app.use(
   cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+    origin: allowedOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
@@ -87,8 +94,8 @@ const PORT = process.env.PORT || 5000;
 
 async function startServer() {
   await connectDB();
-  app.listen(PORT, () => {
-    console.log(`Server running: http://localhost:${PORT}`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
   });
 }
 
