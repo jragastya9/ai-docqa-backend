@@ -5,6 +5,7 @@ import Tenant from '../models/Tenant.js';
 import { searchChunks } from '../services/searchService.js';
 import { generateAnswer, streamAnswer } from '../services/llmService.js';
 import { getCached, setCached } from '../services/cacheService.js';
+import { checkContent } from '../services/moderationService.js';
 import {
   incrementMessages,
   incrementTokens,
@@ -46,6 +47,24 @@ export async function chat(req, res) {
 
     const userId = req.user._id;
     const tenantId = req.tenantId;
+
+    // Moderation check
+    const mod = await checkContent({
+      content: question.trim(),
+      userId,
+      tenantId,
+      source: 'chat',
+      blockOnFlag: true,
+    });
+
+    if (!mod.allowed) {
+      return res.status(400).json({
+        success: false,
+        error: 'Your message was flagged by our content moderation system.',
+        code: 'CONTENT_FLAGGED',
+      });
+    }
+
     let conversation;
 
     if (conversationId) {
@@ -119,7 +138,6 @@ export async function chat(req, res) {
       });
     }
 
-    // Check cache first
     let cached = null;
     if (aiSettings.cachingEnabled && !documentId) {
       cached = await getCached(tenantId, question.trim());
@@ -169,7 +187,6 @@ export async function chat(req, res) {
         score: parseFloat(c.score.toFixed(4)),
       }));
 
-      // Cache the result
       if (aiSettings.cachingEnabled && !documentId) {
         await setCached({
           tenantId,
@@ -259,6 +276,23 @@ export async function chatStream(req, res) {
 
     const userId = req.user._id;
     const tenantId = req.tenantId;
+
+    // Moderation check
+    const mod = await checkContent({
+      content: question.trim(),
+      userId,
+      tenantId,
+      source: 'chat',
+      blockOnFlag: true,
+    });
+
+    if (!mod.allowed) {
+      send('error', {
+        error: 'Your message was flagged by our content moderation system.',
+      });
+      return res.end();
+    }
+
     let conversation;
 
     if (conversationId) {
@@ -350,7 +384,6 @@ export async function chatStream(req, res) {
 
     send('sources', { sources });
 
-    // ─── Try cache ───
     let cached = null;
     if (aiSettings.cachingEnabled && !documentId) {
       cached = await getCached(tenantId, question.trim());
@@ -392,7 +425,6 @@ export async function chatStream(req, res) {
       return res.end();
     }
 
-    // ─── Stream fresh answer ───
     let fullText = '';
     let tokensUsed = 0;
     let provider = aiSettings.provider;
@@ -443,7 +475,6 @@ export async function chatStream(req, res) {
       await incrementMessages(tenantId, 1);
       await incrementTokens(tenantId, tokensUsed);
 
-      // Cache the fresh result
       if (aiSettings.cachingEnabled && !documentId && fullText.trim()) {
         await setCached({
           tenantId,

@@ -19,6 +19,9 @@ import webhookRoutes from './routes/webhook.routes.js';
 import feedbackRoutes from './routes/feedback.routes.js';
 import securityRoutes from './routes/security.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import moderationRoutes from './routes/moderation.routes.js';
+import backupRoutes from './routes/backup.routes.js';
+import supportRoutes from './routes/support.routes.js';
 
 const app = express();
 
@@ -65,6 +68,9 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/feedback', feedbackRoutes);
 app.use('/api/security', securityRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/moderation', moderationRoutes);
+app.use('/api/backup', backupRoutes);
+app.use('/api/support', supportRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Error middleware:', err.message);
