@@ -13,6 +13,7 @@ import dashboardRoutes from './routes/dashboard.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import teamRoutes from './routes/team.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import searchRoutes from './routes/search.routes.js';
 
 const app = express();
 
@@ -53,6 +54,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/search', searchRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Error middleware:', err.message);
