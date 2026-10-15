@@ -11,107 +11,134 @@ import {
 
 const SALT_ROUNDS = 12;
 
+function slugify(text) {
+  return (
+    text
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 24) || 'workspace'
+  );
+}
+
+async function generateUniqueSubdomain(businessName) {
+  const base = slugify(businessName);
+  let candidate = base;
+  let counter = 1;
+
+  while (await Tenant.findOne({ subdomain: candidate })) {
+    candidate = `${base}-${counter}`;
+    counter++;
+    if (counter > 999) {
+      candidate = `${base}-${Date.now().toString().slice(-6)}`;
+      break;
+    }
+  }
+  return candidate;
+}
+
 export async function signup(req, res) {
   try {
     const { name, email, password, businessName } = req.body;
 
-    if (!name || !email || !password) {
+    if (!name || !email || !password || !businessName) {
       return res.status(400).json({
         success: false,
-        error: 'Name, email, and password are required.',
+        error: 'Name, email, password, and business name are required',
       });
     }
 
     if (password.length < 6) {
       return res.status(400).json({
         success: false,
-        error: 'Password must be at least 6 characters.',
+        error: 'Password must be at least 6 characters',
       });
     }
 
-    const existing = await User.findOne({ email: email.toLowerCase() });
+    const normalized = email.toLowerCase().trim();
+
+    const existing = await User.findOne({ email: normalized });
     if (existing) {
-      return res.status(409).json({
-        success: false,
-        error: 'An account with this email already exists.',
-      });
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email already registered' });
     }
 
-    const slugBase = (businessName || name)
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 40);
-    const slug = `${slugBase}-${Date.now().toString(36)}`;
+    const subdomain = await generateUniqueSubdomain(businessName);
 
     const tenant = await Tenant.create({
-      name: businessName || `${name}'s Workspace`,
-      slug,
+      name: businessName.trim(),
+      slug: subdomain,
+      subdomain,
+      plan: 'free',
+      settings: {
+        primaryColor: '#6366f1',
+      },
     });
 
-    const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-    const emailVerificationToken = crypto.randomBytes(32).toString('hex');
-    const emailVerificationExpires = new Date(
-      Date.now() + 24 * 60 * 60 * 1000
-    );
+    const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+    const verificationToken = crypto.randomBytes(32).toString('hex');
 
     const user = await User.create({
       name: name.trim(),
-      email: email.toLowerCase().trim(),
-      password: hashedPassword,
+      email: normalized,
+      password: passwordHash,
       tenantId: tenant._id,
       role: 'owner',
       emailVerified: false,
-      emailVerificationToken,
-      emailVerificationExpires,
+      verificationToken,
     });
 
     tenant.ownerId = user._id;
     await tenant.save();
 
-    const token = signToken({
-      id: user._id,
-      email: user.email,
-      tenantId: tenant._id,
-      role: 'owner',
-    });
+    const token = signToken(user);
 
     try {
-      await sendWelcomeEmail({ to: user.email, name: user.name });
+      await sendWelcomeEmail({
+        to: user.email,
+        name: user.name,
+        tenantName: tenant.name,
+      });
+    } catch (emailErr) {
+      console.error('Welcome email failed:', emailErr.message);
+    }
+
+    try {
       await sendVerificationEmail({
         to: user.email,
         name: user.name,
-        token: emailVerificationToken,
+        token: verificationToken,
       });
     } catch (emailErr) {
-      console.error('Email send failed:', emailErr.message);
+      console.error('Verification email failed:', emailErr.message);
     }
 
     return res.status(201).json({
       success: true,
-      message: 'Account created. Check your email to verify.',
       token,
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
         role: user.role,
-        tenantId: tenant._id,
-        emailVerified: user.emailVerified,
+        avatar: user.avatar,
       },
       tenant: {
         id: tenant._id,
         name: tenant.name,
         slug: tenant.slug,
+        subdomain: tenant.subdomain,
         plan: tenant.plan,
+        brandName: tenant.settings?.brandName || tenant.name,
+        logo: tenant.settings?.logo || null,
+        primaryColor: tenant.settings?.primaryColor || '#6366f1',
       },
     });
-  } catch (error) {
-    console.error('Signup error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Something went wrong. Please try again.',
-    });
+  } catch (err) {
+    console.error('Signup error:', err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 }
 
@@ -120,277 +147,32 @@ export async function login(req, res) {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email and password are required.',
-      });
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email and password are required' });
     }
 
-    const user = await User.findOne({ email: email.toLowerCase() }).select(
-      '+password'
-    );
+    const normalized = email.toLowerCase().trim();
+    const user = await User.findOne({ email: normalized });
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid email or password.',
-      });
+    if (!user || !user.password) {
+      return res
+        .status(401)
+        .json({ success: false, error: 'Invalid credentials' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        error: 'Invalid email or password.',
-      });
-    }
-
-    if (!user.isActive) {
-      return res.status(403).json({
-        success: false,
-        error: 'Your account has been deactivated.',
-      });
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
+      return res
+        .status(401)
+        .json({ success: false, error: 'Invalid credentials' });
     }
 
     user.lastLoginAt = new Date();
-    await user.save({ validateBeforeSave: false });
-
-    const token = signToken({
-      id: user._id,
-      email: user.email,
-      tenantId: user.tenantId,
-      role: user.role,
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: 'Logged in successfully.',
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        tenantId: user.tenantId,
-        emailVerified: user.emailVerified,
-        lastLoginAt: user.lastLoginAt,
-      },
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Something went wrong. Please try again.',
-    });
-  }
-}
-
-export async function getMe(req, res) {
-  return res.status(200).json({
-    success: true,
-    user: {
-      id: req.user._id,
-      name: req.user.name,
-      email: req.user.email,
-      role: req.user.role,
-      tenantId: req.user.tenantId,
-      emailVerified: req.user.emailVerified,
-      createdAt: req.user.createdAt,
-    },
-  });
-}
-
-export async function verifyEmail(req, res) {
-  try {
-    const { token } = req.body;
-
-    if (!token) {
-      return res.status(400).json({
-        success: false,
-        error: 'Verification token is required.',
-      });
-    }
-
-    const user = await User.findOne({
-      emailVerificationToken: token,
-      emailVerificationExpires: { $gt: new Date() },
-    }).select('+emailVerificationToken +emailVerificationExpires');
-
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid or expired verification token.',
-      });
-    }
-
-    user.emailVerified = true;
-    user.emailVerificationToken = undefined;
-    user.emailVerificationExpires = undefined;
-    await user.save({ validateBeforeSave: false });
-
-    res.json({
-      success: true,
-      message: 'Email verified successfully.',
-      user: {
-        id: user._id,
-        email: user.email,
-        emailVerified: true,
-      },
-    });
-  } catch (err) {
-    console.error('Verify email error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
-
-export async function forgotPassword(req, res) {
-  try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email is required.',
-      });
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase() });
-
-    if (!user) {
-      return res.json({
-        success: true,
-        message: 'If that email exists, a reset link has been sent.',
-      });
-    }
-
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const resetExpires = new Date(Date.now() + 60 * 60 * 1000);
-
-    user.passwordResetToken = resetToken;
-    user.passwordResetExpires = resetExpires;
-    await user.save({ validateBeforeSave: false });
-
-    try {
-      await sendPasswordResetEmail({
-        to: user.email,
-        name: user.name,
-        token: resetToken,
-      });
-    } catch (emailErr) {
-      console.error('Reset email failed:', emailErr.message);
-    }
-
-    res.json({
-      success: true,
-      message: 'If that email exists, a reset link has been sent.',
-    });
-  } catch (err) {
-    console.error('Forgot password error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
-
-export async function resetPassword(req, res) {
-  try {
-    const { token, password } = req.body;
-
-    if (!token || !password) {
-      return res.status(400).json({
-        success: false,
-        error: 'Token and password are required.',
-      });
-    }
-
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        error: 'Password must be at least 6 characters.',
-      });
-    }
-
-    const user = await User.findOne({
-      passwordResetToken: token,
-      passwordResetExpires: { $gt: new Date() },
-    }).select('+passwordResetToken +passwordResetExpires');
-
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid or expired reset token.',
-      });
-    }
-
-    user.password = await bcrypt.hash(password, SALT_ROUNDS);
-    user.passwordResetToken = undefined;
-    user.passwordResetExpires = undefined;
     await user.save();
 
-    res.json({
-      success: true,
-      message: 'Password reset successfully. You can now log in.',
-    });
-  } catch (err) {
-    console.error('Reset password error:', err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-}
-
-export async function googleAuth(req, res) {
-  try {
-    const { email, name, image, googleId } = req.body;
-
-    if (!email || !googleId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Email and Google ID are required.',
-      });
-    }
-
-    let user = await User.findOne({ email: email.toLowerCase() });
-
-    if (user) {
-      if (!user.googleId) {
-        user.googleId = googleId;
-        if (image && !user.avatar) user.avatar = image;
-        await user.save({ validateBeforeSave: false });
-      }
-    } else {
-      const slugBase = (name || email)
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 40);
-      const slug = `${slugBase}-${Date.now().toString(36)}`;
-
-      const tenant = await Tenant.create({
-        name: `${name || 'User'}'s Workspace`,
-        slug,
-      });
-
-      user = await User.create({
-        name: name || email.split('@')[0],
-        email: email.toLowerCase(),
-        password: await bcrypt.hash(
-          crypto.randomBytes(32).toString('hex'),
-          SALT_ROUNDS
-        ),
-        tenantId: tenant._id,
-        role: 'owner',
-        googleId,
-        avatar: image,
-        emailVerified: true,
-      });
-
-      tenant.ownerId = user._id;
-      await tenant.save();
-    }
-
-    const token = signToken({
-      id: user._id,
-      email: user.email,
-      tenantId: user.tenantId,
-      role: user.role,
-    });
+    const tenant = await Tenant.findById(user.tenantId);
+    const token = signToken(user);
 
     return res.json({
       success: true,
@@ -400,13 +182,293 @@ export async function googleAuth(req, res) {
         name: user.name,
         email: user.email,
         role: user.role,
-        tenantId: user.tenantId,
         avatar: user.avatar,
-        emailVerified: user.emailVerified,
+      },
+      tenant: tenant
+        ? {
+            id: tenant._id,
+            name: tenant.name,
+            slug: tenant.slug,
+            subdomain: tenant.subdomain,
+            plan: tenant.plan,
+            brandName: tenant.settings?.brandName || tenant.name,
+            logo: tenant.settings?.logo || null,
+            primaryColor: tenant.settings?.primaryColor || '#6366f1',
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error('Login error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function googleAuth(req, res) {
+  try {
+    const { email, name, image, googleId } = req.body;
+
+    if (!email || typeof email !== 'string') {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email is required' });
+    }
+
+    const normalized = email.toLowerCase().trim();
+
+    let user = await User.findOne({ email: normalized });
+
+    if (user) {
+      user.lastLoginAt = new Date();
+      if (image && !user.avatar) user.avatar = image;
+      if (googleId && !user.googleId) user.googleId = googleId;
+      await user.save();
+
+      const tenant = await Tenant.findById(user.tenantId);
+      const token = signToken(user);
+
+      return res.json({
+        success: true,
+        token,
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          avatar: user.avatar,
+        },
+        tenant: tenant
+          ? {
+              id: tenant._id,
+              name: tenant.name,
+              slug: tenant.slug,
+              subdomain: tenant.subdomain,
+              plan: tenant.plan,
+              brandName: tenant.settings?.brandName || tenant.name,
+              logo: tenant.settings?.logo || null,
+              primaryColor: tenant.settings?.primaryColor || '#6366f1',
+            }
+          : null,
+      });
+    }
+
+    const firstName = name?.split(' ')[0] || 'My';
+    const businessName = `${firstName}'s Workspace`;
+    const subdomain = await generateUniqueSubdomain(businessName);
+
+    const tenant = await Tenant.create({
+      name: businessName,
+      slug: subdomain,
+      subdomain,
+      plan: 'free',
+      settings: {
+        primaryColor: '#6366f1',
+      },
+    });
+
+    user = await User.create({
+      name: name || normalized.split('@')[0],
+      email: normalized,
+      password: null,
+      avatar: image,
+      tenantId: tenant._id,
+      role: 'owner',
+      emailVerified: true,
+      googleId: googleId || undefined,
+    });
+
+    tenant.ownerId = user._id;
+    await tenant.save();
+
+    const token = signToken(user);
+
+    return res.status(201).json({
+      success: true,
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar,
+      },
+      tenant: {
+        id: tenant._id,
+        name: tenant.name,
+        slug: tenant.slug,
+        subdomain: tenant.subdomain,
+        plan: tenant.plan,
+        brandName: tenant.settings?.brandName || tenant.name,
+        logo: tenant.settings?.logo || null,
+        primaryColor: tenant.settings?.primaryColor || '#6366f1',
       },
     });
   } catch (err) {
     console.error('Google auth error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+// ─── Email verification ───
+export async function verifyEmail(req, res) {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Token is required' });
+    }
+    const user = await User.findOne({ verificationToken: token });
+    if (!user) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Invalid or expired token' });
+    }
+    user.emailVerified = true;
+    user.verificationToken = undefined;
+    await user.save();
+    return res.json({ success: true, message: 'Email verified' });
+  } catch (err) {
+    console.error('Verify email error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+// ─── Resend verification ───
+export async function resendVerification(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email is required' });
+    }
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, error: 'User not found' });
+    }
+    if (user.emailVerified) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email already verified' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    user.verificationToken = token;
+    await user.save();
+    await sendVerificationEmail({ to: user.email, name: user.name, token });
+    return res.json({ success: true, message: 'Verification email sent' });
+  } catch (err) {
+    console.error('Resend verification error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+// ─── Forgot password ───
+export async function forgotPassword(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email is required' });
+    }
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+    // Always return success to avoid user enumeration
+    if (!user) {
+      return res.json({
+        success: true,
+        message: 'If the email exists, a reset link has been sent',
+      });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    user.resetPasswordToken = token;
+    user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await user.save();
+    try {
+      await sendPasswordResetEmail({
+        to: user.email,
+        name: user.name,
+        token,
+      });
+    } catch (emailErr) {
+      console.error('Reset email failed:', emailErr.message);
+    }
+    return res.json({
+      success: true,
+      message: 'If the email exists, a reset link has been sent',
+    });
+  } catch (err) {
+    console.error('Forgot password error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+// ─── Reset password ───
+export async function resetPassword(req, res) {
+  try {
+    const { token, password } = req.body;
+    if (!token || !password) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Token and password are required' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 6 characters',
+      });
+    }
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: new Date() },
+    });
+    if (!user) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'Invalid or expired token' });
+    }
+    user.password = await bcrypt.hash(password, SALT_ROUNDS);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+    return res.json({ success: true, message: 'Password reset successful' });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+// ─── Get current user ───
+export async function getMe(req, res) {
+  try {
+    const user = await User.findById(req.user._id).select('-password');
+    const tenant = await Tenant.findById(req.tenantId);
+    return res.json({
+      success: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        avatar: user.avatar,
+        emailVerified: user.emailVerified,
+      },
+      tenant: tenant
+        ? {
+            id: tenant._id,
+            name: tenant.name,
+            slug: tenant.slug,
+            subdomain: tenant.subdomain,
+            plan: tenant.plan,
+            brandName: tenant.settings?.brandName || tenant.name,
+            logo: tenant.settings?.logo || null,
+            primaryColor: tenant.settings?.primaryColor || '#6366f1',
+          }
+        : null,
+    });
+  } catch (err) {
+    console.error('Get me error:', err);
     return res.status(500).json({ success: false, error: err.message });
   }
 }

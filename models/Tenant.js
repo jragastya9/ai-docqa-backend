@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+﻿import mongoose from 'mongoose';
 
 const tenantSchema = new mongoose.Schema(
   {
@@ -9,12 +9,33 @@ const tenantSchema = new mongoose.Schema(
       maxlength: 100,
     },
     slug: {
-  type: String,
-  required: true,
-  unique: true,
-  lowercase: true,
-  trim: true,
-},
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+      index: true,
+    },
+    subdomain: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      sparse: true,
+      unique: true,
+      index: true,
+    },
+    customDomain: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      sparse: true,
+      unique: true,
+      index: true,
+    },
+    domainVerified: {
+      type: Boolean,
+      default: false,
+    },
     ownerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
@@ -26,9 +47,13 @@ const tenantSchema = new mongoose.Schema(
       default: 'free',
     },
     settings: {
+      brandName: String,
       tagline: String,
       logo: String,
+      favicon: String,
       primaryColor: { type: String, default: '#6366f1' },
+      supportEmail: String,
+      footerText: String,
     },
     isActive: {
       type: Boolean,
@@ -39,7 +64,5 @@ const tenantSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-
-tenantSchema.index({ ownerId: 1 });
 
 export default mongoose.model('Tenant', tenantSchema);
