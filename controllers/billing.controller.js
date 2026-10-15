@@ -1,7 +1,8 @@
-import crypto from 'crypto';
+﻿import crypto from 'crypto';
 import Tenant from '../models/Tenant.js';
 import Subscription from '../models/Subscription.js';
 import { getUsage } from '../services/usageService.js';
+import { notify } from '../services/notificationService.js';
 import { PLANS, getPlan } from '../config/plans.js';
 
 export async function listPlans(req, res) {
@@ -103,6 +104,20 @@ export async function verifyPayment(req, res) {
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     });
 
+    try {
+      await notify({
+        userId: req.user._id,
+        tenantId: req.tenantId,
+        type: 'plan_upgraded',
+        title: `Upgraded to ${PLANS[plan].name}`,
+        description: `Your workspace is now on the ${PLANS[plan].name} plan.`,
+        href: '/billing',
+        meta: { plan },
+      });
+    } catch (notifErr) {
+      console.error('Upgrade notification failed:', notifErr.message);
+    }
+
     res.json({
       success: true,
       message: 'Payment verified, plan upgraded',
@@ -132,6 +147,19 @@ export async function cancelSubscription(req, res) {
       { tenantId: req.tenantId, status: 'active' },
       { status: 'cancelled' }
     );
+
+    try {
+      await notify({
+        userId: req.user._id,
+        tenantId: req.tenantId,
+        type: 'plan_downgraded',
+        title: 'Downgraded to Free',
+        description: 'Your workspace is back on the Free plan.',
+        href: '/billing',
+      });
+    } catch (notifErr) {
+      console.error('Downgrade notification failed:', notifErr.message);
+    }
 
     res.json({
       success: true,

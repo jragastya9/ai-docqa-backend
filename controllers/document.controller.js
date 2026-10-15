@@ -1,6 +1,8 @@
-import Document from '../models/Document.js';
+﻿import Document from '../models/Document.js';
 import Chunk from '../models/Chunk.js';
+import Tenant from '../models/Tenant.js';
 import { incrementDocuments } from '../services/usageService.js';
+import { notify } from '../services/notificationService.js';
 import {
   extractTextFromPDF,
   cleanText,
@@ -60,6 +62,24 @@ export async function uploadDocument(req, res) {
       await doc.save();
 
       await incrementDocuments(req.tenantId, 1);
+
+      // Notify the tenant owner
+      try {
+        const tenant = await Tenant.findById(req.tenantId);
+        if (tenant && tenant.ownerId) {
+          await notify({
+            userId: tenant.ownerId,
+            tenantId: req.tenantId,
+            type: 'document_uploaded',
+            title: 'Document processed',
+            description: `${doc.fileName} is ready for chat (${pageCount} pages, ${chunks.length} chunks).`,
+            href: '/documents',
+            meta: { documentId: doc._id.toString() },
+          });
+        }
+      } catch (notifErr) {
+        console.error('Upload notification failed:', notifErr.message);
+      }
 
       console.log('✅ Document processed successfully');
 

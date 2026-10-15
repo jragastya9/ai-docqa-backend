@@ -3,6 +3,7 @@ import Invitation from '../models/Invitation.js';
 import User from '../models/User.js';
 import Tenant from '../models/Tenant.js';
 import { sendTeamInviteEmail } from '../services/emailService.js';
+import { notify } from '../services/notificationService.js';
 
 const INVITE_TTL_DAYS = 7;
 
@@ -13,7 +14,9 @@ export async function inviteMember(req, res) {
     const inviterId = req.user._id;
 
     if (!email || typeof email !== 'string') {
-      return res.status(400).json({ success: false, error: 'Email is required' });
+      return res
+        .status(400)
+        .json({ success: false, error: 'Email is required' });
     }
 
     const normalized = email.toLowerCase().trim();
@@ -73,6 +76,20 @@ export async function inviteMember(req, res) {
       });
     } catch (emailErr) {
       console.error('Invite email failed:', emailErr.message);
+    }
+
+    try {
+      await notify({
+        userId: inviterId,
+        tenantId,
+        type: 'team_invite_sent',
+        title: 'Invitation sent',
+        description: `Invited ${normalized} as ${role}.`,
+        href: '/team',
+        meta: { email: normalized, role },
+      });
+    } catch (notifErr) {
+      console.error('Invite notification failed:', notifErr.message);
     }
 
     return res.status(201).json({
@@ -143,7 +160,9 @@ export async function updateMemberRole(req, res) {
 
     const member = await User.findOne({ _id: id, tenantId });
     if (!member) {
-      return res.status(404).json({ success: false, error: 'Member not found' });
+      return res
+        .status(404)
+        .json({ success: false, error: 'Member not found' });
     }
 
     if (member.role === 'owner') {
@@ -184,7 +203,9 @@ export async function removeMember(req, res) {
 
     const member = await User.findOne({ _id: id, tenantId });
     if (!member) {
-      return res.status(404).json({ success: false, error: 'Member not found' });
+      return res
+        .status(404)
+        .json({ success: false, error: 'Member not found' });
     }
 
     if (member.role === 'owner') {
@@ -195,6 +216,19 @@ export async function removeMember(req, res) {
 
     member.tenantId = null;
     await member.save();
+
+    try {
+      await notify({
+        userId: req.user._id,
+        tenantId,
+        type: 'team_member_removed',
+        title: 'Member removed',
+        description: `${member.name} was removed from the workspace.`,
+        href: '/team',
+      });
+    } catch (notifErr) {
+      console.error('Removal notification failed:', notifErr.message);
+    }
 
     return res.json({ success: true, message: 'Member removed' });
   } catch (err) {

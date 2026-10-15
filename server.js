@@ -1,4 +1,4 @@
-import './config/env.js';
+﻿import './config/env.js';
 import express from 'express';
 import cors from 'cors';
 import { connectDB } from './config/db.js';
@@ -12,10 +12,10 @@ import billingRoutes from './routes/billing.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import analyticsRoutes from './routes/analytics.routes.js';
 import teamRoutes from './routes/team.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
 
 const app = express();
 
-// ─── CORS — MUST be first ───
 const allowedOrigins = [
   'http://localhost:3000',
   'http://127.0.0.1:3000',
@@ -35,16 +35,13 @@ app.use(
 
 app.options('*', cors());
 
-// Body parsers
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Health
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'API running' });
 });
 
-// Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/query', queryRoutes);
@@ -55,8 +52,8 @@ app.use('/api/billing', billingRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/team', teamRoutes);
+app.use('/api/notifications', notificationRoutes);
 
-// Error handler
 app.use((err, req, res, next) => {
   console.error('Error middleware:', err.message);
 
@@ -86,7 +83,6 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404
 app.use((req, res) => {
   res.status(404).json({
     success: false,
