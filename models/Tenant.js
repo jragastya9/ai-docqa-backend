@@ -59,6 +59,8 @@ const tenantSchema = new mongoose.Schema(
       aiProvider: { type: String, default: 'groq' },
       customPrompt: { type: String, default: '' },
       cachingEnabled: { type: Boolean, default: true },
+      // Admin (Day 21) — feature flags
+      featureFlags: { type: mongoose.Schema.Types.Mixed, default: {} },
     },
     isActive: {
       type: Boolean,
