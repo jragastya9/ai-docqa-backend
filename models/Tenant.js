@@ -47,6 +47,7 @@ const tenantSchema = new mongoose.Schema(
       default: 'free',
     },
     settings: {
+      // Branding (Day 18)
       brandName: String,
       tagline: String,
       logo: String,
@@ -54,6 +55,10 @@ const tenantSchema = new mongoose.Schema(
       primaryColor: { type: String, default: '#6366f1' },
       supportEmail: String,
       footerText: String,
+      // AI (Day 20)
+      aiProvider: { type: String, default: 'groq' },
+      customPrompt: { type: String, default: '' },
+      cachingEnabled: { type: Boolean, default: true },
     },
     isActive: {
       type: Boolean,

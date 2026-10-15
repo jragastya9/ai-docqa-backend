@@ -16,8 +16,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/generative-ai": "^0.24.1",
     "@huggingface/transformers": "^3.0.0",
     "bcryptjs": "^2.4.3",
+    "cohere-ai": "^8.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -26,6 +28,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.6.0",
     "multer": "^1.4.5-lts.2",
+    "openai": "^7.34.0",
     "pdf-parse": "^1.1.4",
     "qrcode": "^1.5.4",
     "resend": "^6.32.1",

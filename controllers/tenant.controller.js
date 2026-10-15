@@ -1,9 +1,10 @@
 ﻿import Tenant from '../models/Tenant.js';
+import { PROVIDERS } from '../services/llmService.js';
+import { clearCache, getCacheStats } from '../services/cacheService.js';
 
 export async function getPublicBranding(req, res) {
   try {
     const { subdomain, domain, slug } = req.query;
-
     let tenant;
     if (domain) {
       tenant = await Tenant.findOne({
@@ -68,6 +69,7 @@ export async function getMyTenant(req, res) {
         plan: tenant.plan,
         settings: tenant.settings || {},
       },
+      providers: Object.values(PROVIDERS),
     });
   } catch (err) {
     console.error('Get tenant error:', err);
@@ -131,10 +133,96 @@ export async function updateBranding(req, res) {
   }
 }
 
+export async function updateAISettings(req, res) {
+  try {
+    const { aiProvider, customPrompt, cachingEnabled } = req.body;
+
+    const update = {};
+
+    if (aiProvider !== undefined) {
+      if (!PROVIDERS[aiProvider]?.available) {
+        return res.status(400).json({
+          success: false,
+          error: `Provider "${aiProvider}" is not configured on this server`,
+        });
+      }
+      update['settings.aiProvider'] = aiProvider;
+    }
+
+    if (customPrompt !== undefined) {
+      if (typeof customPrompt !== 'string') {
+        return res
+          .status(400)
+          .json({ success: false, error: 'customPrompt must be a string' });
+      }
+      if (customPrompt.length > 2000) {
+        return res.status(400).json({
+          success: false,
+          error: 'customPrompt must be under 2000 chars',
+        });
+      }
+      update['settings.customPrompt'] = customPrompt;
+    }
+
+    if (cachingEnabled !== undefined) {
+      update['settings.cachingEnabled'] = !!cachingEnabled;
+    }
+
+    const tenant = await Tenant.findByIdAndUpdate(
+      req.tenantId,
+      { $set: update },
+      { new: true }
+    );
+
+    if (!tenant) {
+      return res
+        .status(404)
+        .json({ success: false, error: 'Tenant not found' });
+    }
+
+    // If caching was just disabled, clear existing cache
+    if (cachingEnabled === false) {
+      await clearCache(req.tenantId);
+    }
+
+    return res.json({
+      success: true,
+      message: 'AI settings updated',
+      settings: {
+        aiProvider: tenant.settings?.aiProvider || 'groq',
+        customPrompt: tenant.settings?.customPrompt || '',
+        cachingEnabled: tenant.settings?.cachingEnabled !== false,
+      },
+    });
+  } catch (err) {
+    console.error('Update AI settings error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function getAIStats(req, res) {
+  try {
+    const stats = await getCacheStats(req.tenantId);
+    return res.json({ success: true, cache: stats });
+  } catch (err) {
+    console.error('Get AI stats error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
+export async function clearResponseCache(req, res) {
+  try {
+    await clearCache(req.tenantId);
+    return res.json({ success: true, message: 'Cache cleared' });
+  } catch (err) {
+    console.error('Clear cache error:', err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+}
+
 export async function updateSubdomain(req, res) {
   try {
     const { subdomain } = req.body;
-
     if (!subdomain || typeof subdomain !== 'string') {
       return res
         .status(400)
@@ -142,7 +230,6 @@ export async function updateSubdomain(req, res) {
     }
 
     const clean = subdomain.toLowerCase().trim();
-
     if (!/^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$/.test(clean)) {
       return res.status(400).json({
         success: false,
@@ -197,7 +284,6 @@ export async function updateSubdomain(req, res) {
 export async function updateCustomDomain(req, res) {
   try {
     const { customDomain } = req.body;
-
     if (!customDomain || typeof customDomain !== 'string') {
       return res
         .status(400)

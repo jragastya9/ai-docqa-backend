@@ -1,14 +1,29 @@
-import Conversation from '../models/Conversation.js';
+﻿import Conversation from '../models/Conversation.js';
 import Message from '../models/Message.js';
 import Document from '../models/Document.js';
+import Tenant from '../models/Tenant.js';
 import { searchChunks } from '../services/searchService.js';
 import { generateAnswer, streamAnswer } from '../services/llmService.js';
+import { getCached, setCached } from '../services/cacheService.js';
 import {
   incrementMessages,
   incrementTokens,
 } from '../services/usageService.js';
 
-// ─── Non-streaming (kept for compatibility) ───
+async function getTenantAISettings(tenantId) {
+  try {
+    const tenant = await Tenant.findById(tenantId).select('settings');
+    return {
+      provider: tenant?.settings?.aiProvider || 'groq',
+      customPrompt: tenant?.settings?.customPrompt || '',
+      cachingEnabled: tenant?.settings?.cachingEnabled !== false,
+    };
+  } catch {
+    return { provider: 'groq', customPrompt: '', cachingEnabled: true };
+  }
+}
+
+// ─── Non-streaming ───
 export async function chat(req, res) {
   console.log('💬 Chat endpoint hit');
 
@@ -18,7 +33,11 @@ export async function chat(req, res) {
     const topK = req.body?.topK || 5;
     const documentId = req.body?.documentId;
 
-    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+    if (
+      !question ||
+      typeof question !== 'string' ||
+      question.trim().length === 0
+    ) {
       return res.status(400).json({
         success: false,
         error: 'Question is required.',
@@ -53,7 +72,6 @@ export async function chat(req, res) {
     })
       .sort({ createdAt: -1 })
       .limit(10);
-
     history.reverse();
 
     await Message.create({
@@ -65,6 +83,7 @@ export async function chat(req, res) {
     });
 
     const startTime = Date.now();
+    const aiSettings = await getTenantAISettings(tenantId);
 
     const chunks = await searchChunks(question.trim(), tenantId, {
       topK: Math.min(Number(topK) || 5, 10),
@@ -100,29 +119,69 @@ export async function chat(req, res) {
       });
     }
 
-    const { answer, tokensUsed } = await generateAnswer(
-      question.trim(),
-      chunks,
-      history
-    );
+    // Check cache first
+    let cached = null;
+    if (aiSettings.cachingEnabled && !documentId) {
+      cached = await getCached(tenantId, question.trim());
+    }
 
-    const docIds = [...new Set(chunks.map((c) => c.documentId.toString()))];
-    const docs = await Document.find({ _id: { $in: docIds } }).select(
-      'fileName'
-    );
-    const docMap = Object.fromEntries(
-      docs.map((d) => [d._id.toString(), d.fileName])
-    );
+    let answer, tokensUsed, provider, model, sources;
+    let wasCached = false;
 
-    const sources = chunks.map((c, i) => ({
-      sourceNumber: i + 1,
-      chunkId: c._id,
-      documentId: c.documentId,
-      documentName: docMap[c.documentId.toString()] || 'Unknown',
-      chunkIndex: c.chunkIndex,
-      text: c.text,
-      score: parseFloat(c.score.toFixed(4)),
-    }));
+    if (cached) {
+      answer = cached.answer;
+      tokensUsed = cached.tokensUsed;
+      provider = cached.provider;
+      model = cached.model;
+      sources = cached.sources;
+      wasCached = true;
+      console.log('⚡ Cache hit for:', question.trim().slice(0, 40));
+    } else {
+      const result = await generateAnswer(
+        question.trim(),
+        chunks,
+        history,
+        {
+          provider: aiSettings.provider,
+          customPrompt: aiSettings.customPrompt,
+        }
+      );
+      answer = result.answer;
+      tokensUsed = result.tokensUsed;
+      provider = result.provider;
+      model = result.model;
+
+      const docIds = [...new Set(chunks.map((c) => c.documentId.toString()))];
+      const docs = await Document.find({ _id: { $in: docIds } }).select(
+        'fileName'
+      );
+      const docMap = Object.fromEntries(
+        docs.map((d) => [d._id.toString(), d.fileName])
+      );
+
+      sources = chunks.map((c, i) => ({
+        sourceNumber: i + 1,
+        chunkId: c._id,
+        documentId: c.documentId,
+        documentName: docMap[c.documentId.toString()] || 'Unknown',
+        chunkIndex: c.chunkIndex,
+        text: c.text,
+        score: parseFloat(c.score.toFixed(4)),
+      }));
+
+      // Cache the result
+      if (aiSettings.cachingEnabled && !documentId) {
+        await setCached({
+          tenantId,
+          question: question.trim(),
+          answer,
+          sources,
+          provider,
+          model,
+          tokensUsed,
+        });
+      }
+    }
 
     await Message.create({
       conversationId: conversation._id,
@@ -132,6 +191,9 @@ export async function chat(req, res) {
       content: answer,
       sources,
       tokensUsed,
+      model,
+      provider,
+      cached: wasCached,
     });
 
     conversation.lastMessageAt = new Date();
@@ -139,10 +201,10 @@ export async function chat(req, res) {
     await conversation.save();
 
     await incrementMessages(tenantId, 1);
-    await incrementTokens(tenantId, tokensUsed);
+    if (!wasCached) await incrementTokens(tenantId, tokensUsed);
 
     const totalDuration = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✅ Chat complete in ${totalDuration}s`);
+    console.log(`✅ Chat complete in ${totalDuration}s (cached: ${wasCached})`);
 
     return res.json({
       success: true,
@@ -151,6 +213,9 @@ export async function chat(req, res) {
       answer,
       sources,
       tokensUsed,
+      provider,
+      model,
+      cached: wasCached,
       duration: `${totalDuration}s`,
     });
   } catch (error) {
@@ -162,15 +227,14 @@ export async function chat(req, res) {
   }
 }
 
-// ─── Streaming version (Server-Sent Events) ───
+// ─── Streaming ───
 export async function chatStream(req, res) {
   console.log('💬 Chat STREAM endpoint hit');
 
-  // SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
+  res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
 
   const send = (event, data) => {
@@ -184,7 +248,11 @@ export async function chatStream(req, res) {
     const topK = req.body?.topK || 5;
     const documentId = req.body?.documentId;
 
-    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+    if (
+      !question ||
+      typeof question !== 'string' ||
+      question.trim().length === 0
+    ) {
       send('error', { error: 'Question is required.' });
       return res.end();
     }
@@ -210,7 +278,6 @@ export async function chatStream(req, res) {
       });
     }
 
-    // Send conversation id immediately so the client can track it
     send('meta', { conversationId: conversation._id.toString() });
 
     const history = await Message.find({
@@ -218,7 +285,6 @@ export async function chatStream(req, res) {
     })
       .sort({ createdAt: -1 })
       .limit(10);
-
     history.reverse();
 
     await Message.create({
@@ -229,6 +295,8 @@ export async function chatStream(req, res) {
       content: question.trim(),
     });
 
+    const aiSettings = await getTenantAISettings(tenantId);
+
     const chunks = await searchChunks(question.trim(), tenantId, {
       topK: Math.min(Number(topK) || 5, 10),
       documentId,
@@ -238,7 +306,6 @@ export async function chatStream(req, res) {
       const emptyAnswer =
         "I couldn't find any relevant information in your documents to answer that question.";
 
-      // Stream it out in tiny chunks so the UX feels consistent
       for (const word of emptyAnswer.split(' ')) {
         send('token', { token: word + ' ' });
       }
@@ -250,6 +317,7 @@ export async function chatStream(req, res) {
         role: 'assistant',
         content: emptyAnswer,
         sources: [],
+        provider: aiSettings.provider,
       });
 
       conversation.lastMessageAt = new Date();
@@ -258,11 +326,10 @@ export async function chatStream(req, res) {
 
       await incrementMessages(tenantId, 1);
 
-      send('done', { sources: [], tokensUsed: 0 });
+      send('done', { sources: [], tokensUsed: 0, cached: false });
       return res.end();
     }
 
-    // Attach document names to chunks for source metadata
     const docIds = [...new Set(chunks.map((c) => c.documentId.toString()))];
     const docs = await Document.find({ _id: { $in: docIds } }).select(
       'fileName'
@@ -281,21 +348,66 @@ export async function chatStream(req, res) {
       score: parseFloat(c.score.toFixed(4)),
     }));
 
-    // Send sources BEFORE the answer so the UI can display them immediately
     send('sources', { sources });
 
-    // Stream the answer
+    // ─── Try cache ───
+    let cached = null;
+    if (aiSettings.cachingEnabled && !documentId) {
+      cached = await getCached(tenantId, question.trim());
+    }
+
+    if (cached) {
+      console.log('⚡ Stream cache hit');
+      send('meta_event', { cached: true });
+
+      const words = cached.answer.split(/(\s+)/);
+      for (const w of words) {
+        send('token', { token: w });
+      }
+
+      await Message.create({
+        conversationId: conversation._id,
+        userId,
+        tenantId,
+        role: 'assistant',
+        content: cached.answer,
+        sources: cached.sources,
+        tokensUsed: cached.tokensUsed,
+        model: cached.model,
+        provider: cached.provider,
+        cached: true,
+      });
+
+      conversation.lastMessageAt = new Date();
+      conversation.messageCount += 2;
+      await conversation.save();
+
+      await incrementMessages(tenantId, 1);
+
+      send('done', {
+        sources: cached.sources,
+        tokensUsed: cached.tokensUsed,
+        cached: true,
+      });
+      return res.end();
+    }
+
+    // ─── Stream fresh answer ───
     let fullText = '';
     let tokensUsed = 0;
+    let provider = aiSettings.provider;
+    let model = null;
     let aborted = false;
 
-    // Listen for client abort (user clicked Stop)
     req.on('close', () => {
       aborted = true;
       console.log('⚠️ Client aborted stream');
     });
 
-    for await (const event of streamAnswer(question.trim(), chunks, history)) {
+    for await (const event of streamAnswer(question.trim(), chunks, history, {
+      provider: aiSettings.provider,
+      customPrompt: aiSettings.customPrompt,
+    })) {
       if (aborted) break;
 
       if (event.type === 'token') {
@@ -304,12 +416,13 @@ export async function chatStream(req, res) {
       } else if (event.type === 'done') {
         fullText = event.data.fullText || fullText;
         tokensUsed = event.data.tokensUsed || 0;
+        provider = event.data.provider || provider;
+        model = event.data.model || null;
       } else if (event.type === 'error') {
         send('error', { error: event.data });
       }
     }
 
-    // Persist whatever we generated (even if aborted, we keep partial)
     if (fullText.trim()) {
       await Message.create({
         conversationId: conversation._id,
@@ -319,6 +432,8 @@ export async function chatStream(req, res) {
         content: fullText,
         sources,
         tokensUsed,
+        model,
+        provider,
       });
 
       conversation.lastMessageAt = new Date();
@@ -327,10 +442,23 @@ export async function chatStream(req, res) {
 
       await incrementMessages(tenantId, 1);
       await incrementTokens(tenantId, tokensUsed);
+
+      // Cache the fresh result
+      if (aiSettings.cachingEnabled && !documentId && fullText.trim()) {
+        await setCached({
+          tenantId,
+          question: question.trim(),
+          answer: fullText,
+          sources,
+          provider,
+          model,
+          tokensUsed,
+        });
+      }
     }
 
     if (!aborted) {
-      send('done', { sources, tokensUsed });
+      send('done', { sources, tokensUsed, cached: false });
     }
     res.end();
   } catch (error) {

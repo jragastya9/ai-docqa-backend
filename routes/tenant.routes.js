@@ -5,6 +5,9 @@ import {
   getPublicBranding,
   getMyTenant,
   updateBranding,
+  updateAISettings,
+  getAIStats,
+  clearResponseCache,
   updateSubdomain,
   updateCustomDomain,
   removeCustomDomain,
@@ -21,6 +24,13 @@ router.use((req, res, next) => {
 
 router.get('/me', getMyTenant);
 router.patch('/branding', requireRole('owner', 'admin'), updateBranding);
+router.patch('/ai', requireRole('owner', 'admin'), updateAISettings);
+router.get('/ai/stats', getAIStats);
+router.post(
+  '/ai/cache/clear',
+  requireRole('owner', 'admin'),
+  clearResponseCache
+);
 router.post('/subdomain', requireRole('owner'), updateSubdomain);
 router.post('/domain', requireRole('owner'), updateCustomDomain);
 router.delete('/domain', requireRole('owner'), removeCustomDomain);
