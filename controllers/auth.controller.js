@@ -153,7 +153,7 @@ export async function login(req, res) {
     }
 
     const normalized = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalized });
+    const user = await User.findOne({ email: normalized }).select('+password');
 
     if (!user || !user.password) {
       return res

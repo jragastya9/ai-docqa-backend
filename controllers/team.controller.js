@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import Tenant from '../models/Tenant.js';
 import { sendTeamInviteEmail } from '../services/emailService.js';
 import { notify } from '../services/notificationService.js';
+import { fireWebhook } from '../services/webhookService.js';
 
 const INVITE_TTL_DAYS = 7;
 
@@ -78,6 +79,7 @@ export async function inviteMember(req, res) {
       console.error('Invite email failed:', emailErr.message);
     }
 
+    // Notify
     try {
       await notify({
         userId: inviterId,
@@ -90,6 +92,21 @@ export async function inviteMember(req, res) {
       });
     } catch (notifErr) {
       console.error('Invite notification failed:', notifErr.message);
+    }
+
+    // Fire webhook
+    try {
+      await fireWebhook({
+        tenantId,
+        event: 'member.invited',
+        data: {
+          email: normalized,
+          role,
+          invitedBy: inviterId.toString(),
+        },
+      });
+    } catch (whErr) {
+      console.error('Invite webhook failed:', whErr.message);
     }
 
     return res.status(201).json({
@@ -217,6 +234,7 @@ export async function removeMember(req, res) {
     member.tenantId = null;
     await member.save();
 
+    // Notify
     try {
       await notify({
         userId: req.user._id,
@@ -228,6 +246,21 @@ export async function removeMember(req, res) {
       });
     } catch (notifErr) {
       console.error('Removal notification failed:', notifErr.message);
+    }
+
+    // Fire webhook
+    try {
+      await fireWebhook({
+        tenantId,
+        event: 'member.removed',
+        data: {
+          memberId: member._id.toString(),
+          memberEmail: member.email,
+          memberName: member.name,
+        },
+      });
+    } catch (whErr) {
+      console.error('Removal webhook failed:', whErr.message);
     }
 
     return res.json({ success: true, message: 'Member removed' });

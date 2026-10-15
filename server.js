@@ -15,6 +15,7 @@ import teamRoutes from './routes/team.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import searchRoutes from './routes/search.routes.js';
 import tenantRoutes from './routes/tenant.routes.js';
+import webhookRoutes from './routes/webhook.routes.js';
 
 const app = express();
 
@@ -57,6 +58,7 @@ app.use('/api/team', teamRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/tenant', tenantRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Error middleware:', err.message);

@@ -3,6 +3,7 @@ import Chunk from '../models/Chunk.js';
 import Tenant from '../models/Tenant.js';
 import { incrementDocuments } from '../services/usageService.js';
 import { notify } from '../services/notificationService.js';
+import { fireWebhook } from '../services/webhookService.js';
 import {
   extractTextFromPDF,
   cleanText,
@@ -79,6 +80,23 @@ export async function uploadDocument(req, res) {
         }
       } catch (notifErr) {
         console.error('Upload notification failed:', notifErr.message);
+      }
+
+      // Fire webhook
+      try {
+        await fireWebhook({
+          tenantId: req.tenantId,
+          event: 'document.uploaded',
+          data: {
+            documentId: doc._id.toString(),
+            fileName: doc.fileName,
+            fileSize: doc.fileSize,
+            pageCount,
+            chunkCount: chunks.length,
+          },
+        });
+      } catch (whErr) {
+        console.error('Upload webhook failed:', whErr.message);
       }
 
       console.log('✅ Document processed successfully');
@@ -184,6 +202,20 @@ export async function deleteDocument(req, res) {
 
     await Chunk.deleteMany({ documentId: doc._id });
     await doc.deleteOne();
+
+    // Fire webhook
+    try {
+      await fireWebhook({
+        tenantId: req.tenantId,
+        event: 'document.deleted',
+        data: {
+          documentId: doc._id.toString(),
+          fileName: doc.fileName,
+        },
+      });
+    } catch (whErr) {
+      console.error('Delete webhook failed:', whErr.message);
+    }
 
     return res.json({
       success: true,

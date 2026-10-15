@@ -3,6 +3,7 @@ import Tenant from '../models/Tenant.js';
 import Subscription from '../models/Subscription.js';
 import { getUsage } from '../services/usageService.js';
 import { notify } from '../services/notificationService.js';
+import { fireWebhook } from '../services/webhookService.js';
 import { PLANS, getPlan } from '../config/plans.js';
 
 export async function listPlans(req, res) {
@@ -104,6 +105,7 @@ export async function verifyPayment(req, res) {
       currentPeriodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     });
 
+    // Notify
     try {
       await notify({
         userId: req.user._id,
@@ -116,6 +118,22 @@ export async function verifyPayment(req, res) {
       });
     } catch (notifErr) {
       console.error('Upgrade notification failed:', notifErr.message);
+    }
+
+    // Fire webhook
+    try {
+      await fireWebhook({
+        tenantId: req.tenantId,
+        event: 'subscription.upgraded',
+        data: {
+          plan,
+          planName: PLANS[plan].name,
+          amount: PLANS[plan].price,
+          currency: PLANS[plan].currency,
+        },
+      });
+    } catch (whErr) {
+      console.error('Upgrade webhook failed:', whErr.message);
     }
 
     res.json({
@@ -148,6 +166,7 @@ export async function cancelSubscription(req, res) {
       { status: 'cancelled' }
     );
 
+    // Notify
     try {
       await notify({
         userId: req.user._id,
@@ -159,6 +178,17 @@ export async function cancelSubscription(req, res) {
       });
     } catch (notifErr) {
       console.error('Downgrade notification failed:', notifErr.message);
+    }
+
+    // Fire webhook
+    try {
+      await fireWebhook({
+        tenantId: req.tenantId,
+        event: 'subscription.downgraded',
+        data: { plan: 'free' },
+      });
+    } catch (whErr) {
+      console.error('Downgrade webhook failed:', whErr.message);
     }
 
     res.json({
