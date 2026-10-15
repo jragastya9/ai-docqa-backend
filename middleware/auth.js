@@ -1,10 +1,9 @@
-import { verifyToken } from '../utils/jwt.js';
+﻿import { verifyToken } from '../utils/jwt.js';
 import User from '../models/User.js';
 
 export async function protect(req, res, next) {
   try {
     let token;
-
     if (
       req.headers.authorization &&
       req.headers.authorization.startsWith('Bearer ')
@@ -29,6 +28,19 @@ export async function protect(req, res, next) {
       });
     }
 
+    // ─── Token version check ───
+    // If the user's tokenVersion in the DB is higher than the one in the JWT,
+    // all tokens issued before that bump are invalid.
+    const tokenVersion = decoded.tv ?? 0;
+    const userVersion = user.tokenVersion ?? 0;
+    if (tokenVersion < userVersion) {
+      return res.status(401).json({
+        success: false,
+        error: 'Session expired. Please log in again.',
+        code: 'TOKEN_REVOKED',
+      });
+    }
+
     if (!user.isActive) {
       return res.status(401).json({
         success: false,
@@ -39,6 +51,7 @@ export async function protect(req, res, next) {
     req.user = user;
     req.tenantId = user.tenantId;
     req.role = user.role;
+    req.tokenId = decoded.jti;
 
     next();
   } catch (error) {

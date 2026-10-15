@@ -153,3 +153,52 @@ export async function sendTeamInviteEmail({
   `);
   return send({ to, subject, html });
 }
+
+// ─── New device login alert ───
+export async function sendNewDeviceAlert({
+  to,
+  name,
+  device,
+  browser,
+  os,
+  ipAddress,
+  city,
+  country,
+  time,
+  revokeUrl,
+}) {
+  const location = city && country ? `${city}, ${country}` : country || 'Unknown location';
+  const subject = 'New sign-in to your LocalBiz AI account';
+
+  const html = wrap(`
+    ${heading('New sign-in detected')}
+    ${paragraph(
+      `Hi ${name}, we noticed a new sign-in to your account from a device you haven't used before.`
+    )}
+    <table style="width:100%;margin:16px 0;border-collapse:collapse;">
+      <tr>
+        <td style="padding:8px 0;font-size:14px;color:#6b7280;width:120px;">Device</td>
+        <td style="padding:8px 0;font-size:14px;color:#0a0a0a;">${device} · ${browser} on ${os}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;font-size:14px;color:#6b7280;">Location</td>
+        <td style="padding:8px 0;font-size:14px;color:#0a0a0a;">${location}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;font-size:14px;color:#6b7280;">IP address</td>
+        <td style="padding:8px 0;font-size:14px;color:#0a0a0a;">${ipAddress || 'Unknown'}</td>
+      </tr>
+      <tr>
+        <td style="padding:8px 0;font-size:14px;color:#6b7280;">Time</td>
+        <td style="padding:8px 0;font-size:14px;color:#0a0a0a;">${time}</td>
+      </tr>
+    </table>
+    ${paragraph(
+      'If this was you, you can safely ignore this email. If this wasn&#39;t you, secure your account immediately.'
+    )}
+    ${button(revokeUrl, 'Review active sessions')}
+    ${fallbackLink(revokeUrl)}
+  `);
+
+  return send({ to, subject, html });
+}
