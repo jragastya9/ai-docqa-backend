@@ -40,6 +40,18 @@ const userSchema = new mongoose.Schema(
       backupCodes: [{ type: String }],
       enabledAt: Date,
     },
+
+    // ─── Day 26 — Marketing ───
+    lastActiveAt: { type: Date, default: Date.now, index: true },
+    onboardingStep: { type: Number, default: 0 },
+    trialEndsAt: { type: Date, default: null },
+
+    emailPrefs: {
+      marketing: { type: Boolean, default: true },
+      onboarding: { type: Boolean, default: true },
+      weeklyDigest: { type: Boolean, default: true },
+      unsubscribedAt: Date,
+    },
   },
   { timestamps: true }
 );

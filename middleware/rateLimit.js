@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+﻿import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 /**
  * Rate limit for public share page views
@@ -17,11 +17,11 @@ export const publicViewLimiter = rateLimit({
 
 /**
  * Rate limit for public chat
- * 20 questions per 15 minutes per IP — generous for real users, blocks bots
+ * 100 questions per 15 minutes per token + IP
  */
 export const publicChatLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 100,
   message: {
     success: false,
     error: 'You have asked too many questions. Please wait a few minutes.',
@@ -29,7 +29,8 @@ export const publicChatLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => {
-    // Rate limit per share token + IP
-    return `${req.params.token}-${req.ip}`;
+    // Use ipKeyGenerator helper for IPv6-safe IP hashing
+    const ip = ipKeyGenerator(req);
+    return `${req.params.token}-${ip}`;
   },
 });

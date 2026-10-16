@@ -22,6 +22,8 @@ import adminRoutes from './routes/admin.routes.js';
 import moderationRoutes from './routes/moderation.routes.js';
 import backupRoutes from './routes/backup.routes.js';
 import supportRoutes from './routes/support.routes.js';
+import marketingRoutes from './routes/marketing.routes.js';
+import { startScheduler } from './jobs/scheduler.js';
 
 const app = express();
 
@@ -71,6 +73,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/moderation', moderationRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/support', supportRoutes);
+app.use('/api/marketing', marketingRoutes);
 
 app.use((err, req, res, next) => {
   console.error('Error middleware:', err.message);
@@ -115,6 +118,7 @@ async function startServer() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
   });
+  startScheduler();
 }
 
 startServer();
