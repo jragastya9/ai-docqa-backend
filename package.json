@@ -19,6 +19,7 @@
     "@google/generative-ai": "^0.24.1",
     "@huggingface/transformers": "^3.0.0",
     "bcryptjs": "^2.4.3",
+    "cloudinary": "^2.11.0",
     "cohere-ai": "^8.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -34,6 +35,7 @@
     "qrcode": "^1.5.4",
     "resend": "^6.32.1",
     "speakeasy": "^2.0.0",
+    "streamifier": "^0.1.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {

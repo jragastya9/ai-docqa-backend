@@ -22,6 +22,10 @@ const documentSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    fileUrl: {
+      type: String, // 👈 NEW: Stores the Cloudinary URL
+      default: null,
+    },
     pageCount: {
       type: Number,
       default: 0,

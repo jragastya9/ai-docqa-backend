@@ -4,6 +4,7 @@ import Tenant from '../models/Tenant.js';
 import { incrementDocuments } from '../services/usageService.js';
 import { notify } from '../services/notificationService.js';
 import { fireWebhook } from '../services/webhookService.js';
+import { uploadPDF } from '../services/cloudinaryService.js'; // 👈 Import
 import {
   extractTextFromPDF,
   cleanText,
@@ -21,13 +22,27 @@ export async function uploadDocument(req, res) {
       });
     }
 
-    console.log('📄 File:', req.file.originalname, '|', req.file.size, 'bytes');
+    // 1. Upload to Cloudinary first
+    let fileUrl = null;
+    try {
+      console.log('☁️ Uploading to Cloudinary...');
+      fileUrl = await uploadPDF(req.file.buffer, req.file.originalname);
+      console.log('☁️ Uploaded:', fileUrl);
+    } catch (cloudErr) {
+      console.error('❌ Cloudinary error:', cloudErr);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to upload file to storage.' 
+      });
+    }
 
+    // 2. Create Document record
     const doc = await Document.create({
       userId: req.user._id,
       tenantId: req.tenantId,
       fileName: req.file.originalname,
       fileSize: req.file.size,
+      fileUrl: fileUrl, // 👈 Save URL
       status: 'processing',
     });
 
@@ -36,14 +51,10 @@ export async function uploadDocument(req, res) {
       const { text, pageCount, wordCount } = await extractTextFromPDF(
         req.file.buffer
       );
-      console.log(`📄 Extracted: ${pageCount} pages, ${wordCount} words`);
 
       const cleaned = cleanText(text);
       const cleanedWordCount = cleaned.split(/\s+/).filter(Boolean).length;
-
-      console.log('📄 Chunking...');
       const chunks = chunkText(cleaned);
-      console.log(`📄 Created ${chunks.length} chunks`);
 
       const chunkDocs = chunks.map((c) => ({
         documentId: doc._id,
@@ -64,7 +75,7 @@ export async function uploadDocument(req, res) {
 
       await incrementDocuments(req.tenantId, 1);
 
-      // Notify the tenant owner
+      // Notify
       try {
         const tenant = await Tenant.findById(req.tenantId);
         if (tenant && tenant.ownerId) {
@@ -73,7 +84,7 @@ export async function uploadDocument(req, res) {
             tenantId: req.tenantId,
             type: 'document_uploaded',
             title: 'Document processed',
-            description: `${doc.fileName} is ready for chat (${pageCount} pages, ${chunks.length} chunks).`,
+            description: `${doc.fileName} is ready for chat.`,
             href: '/documents',
             meta: { documentId: doc._id.toString() },
           });
@@ -82,7 +93,7 @@ export async function uploadDocument(req, res) {
         console.error('Upload notification failed:', notifErr.message);
       }
 
-      // Fire webhook
+      // Webhook
       try {
         await fireWebhook({
           tenantId: req.tenantId,
@@ -90,16 +101,12 @@ export async function uploadDocument(req, res) {
           data: {
             documentId: doc._id.toString(),
             fileName: doc.fileName,
-            fileSize: doc.fileSize,
-            pageCount,
-            chunkCount: chunks.length,
+            fileUrl, // Include URL in webhook
           },
         });
       } catch (whErr) {
         console.error('Upload webhook failed:', whErr.message);
       }
-
-      console.log('✅ Document processed successfully');
 
       return res.status(201).json({
         success: true,
@@ -107,6 +114,7 @@ export async function uploadDocument(req, res) {
         document: {
           id: doc._id,
           fileName: doc.fileName,
+          fileUrl: doc.fileUrl,
           fileSize: doc.fileSize,
           pageCount: doc.pageCount,
           wordCount: doc.wordCount,
@@ -119,8 +127,6 @@ export async function uploadDocument(req, res) {
       doc.status = 'failed';
       doc.errorMessage = innerError.message;
       await doc.save();
-
-      console.error('❌ Processing error:', innerError);
 
       return res.status(500).json({
         success: false,
@@ -163,10 +169,7 @@ export async function getDocument(req, res) {
     });
 
     if (!doc) {
-      return res.status(404).json({
-        success: false,
-        error: 'Document not found.',
-      });
+      return res.status(404).json({ success: false, error: 'Document not found.' });
     }
 
     const chunks = await Chunk.find({ documentId: doc._id })
@@ -194,16 +197,18 @@ export async function deleteDocument(req, res) {
     });
 
     if (!doc) {
-      return res.status(404).json({
-        success: false,
-        error: 'Document not found.',
-      });
+      return res.status(404).json({ success: false, error: 'Document not found.' });
     }
 
     await Chunk.deleteMany({ documentId: doc._id });
     await doc.deleteOne();
 
-    // Fire webhook
+    // Optional: Delete from Cloudinary here if you want to free up space
+    // if (doc.fileUrl) {
+    //   const publicId = doc.fileUrl.split('/').slice(-1)[0].split('.')[0];
+    //   await cloudinary.uploader.destroy(`localbiz-docs/${publicId}`);
+    // }
+
     try {
       await fireWebhook({
         tenantId: req.tenantId,
